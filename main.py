@@ -24,7 +24,6 @@ from app.env import (
     OPENAI_IMAGE_GENERATION_MODEL,
     OPENAI_ASSISTANT_ID,
 )
-from app.slack_ui import build_home_tab
 
 if __name__ == "__main__":
     from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -39,18 +38,6 @@ if __name__ == "__main__":
     app.client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=2))
 
     register_listeners(app)
-
-    @app.event("app_home_opened")
-    def render_home_tab(client: WebClient, context: BoltContext):
-        already_set_api_key = os.environ["OPENAI_API_KEY"]
-        client.views_publish(
-            user_id=context.user_id,
-            view=build_home_tab(
-                openai_api_key=already_set_api_key,
-                context=context,
-                single_workspace_mode=True,
-            ),
-        )
 
     if USE_SLACK_LANGUAGE is True:
 
