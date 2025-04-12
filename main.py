@@ -7,6 +7,9 @@ from slack_sdk.web import WebClient
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 from app.bolt_listeners import before_authorize, register_listeners
+
+load_dotenv()
+
 from app.env import (
     USE_SLACK_LANGUAGE,
     SLACK_APP_LOG_LEVEL,
@@ -19,10 +22,9 @@ from app.env import (
     OPENAI_FUNCTION_CALL_MODULE_NAME,
     OPENAI_ORG_ID,
     OPENAI_IMAGE_GENERATION_MODEL,
+    OPENAI_ASSISTANT_ID,
 )
 from app.slack_ui import build_home_tab
-
-load_dotenv()
 
 if __name__ == "__main__":
     from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -74,6 +76,7 @@ if __name__ == "__main__":
         context["OPENAI_API_VERSION"] = OPENAI_API_VERSION
         context["OPENAI_DEPLOYMENT_ID"] = OPENAI_DEPLOYMENT_ID
         context["OPENAI_ORG_ID"] = OPENAI_ORG_ID
+        context["OPENAI_ASSISTANT_ID"] = OPENAI_ASSISTANT_ID
         context["OPENAI_FUNCTION_CALL_MODULE_NAME"] = OPENAI_FUNCTION_CALL_MODULE_NAME
         next_()
 

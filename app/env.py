@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DEFAULT_SYSTEM_TEXT = """
 You are a bot in a slack chat room. You might receive messages from multiple people.
@@ -43,6 +46,12 @@ OPENAI_DEPLOYMENT_ID = os.environ.get(
 
 DEFAULT_OPENAI_ORG_ID = None
 OPENAI_ORG_ID = os.environ.get("OPENAI_ORG_ID", DEFAULT_OPENAI_ORG_ID)
+
+DEFAULT_OPENAI_ASSISTANT_ID = None
+OPENAI_ASSISTANT_ID = os.environ.get("OPENAI_ASSISTANT_ID", DEFAULT_OPENAI_ASSISTANT_ID)
+
+print(OPENAI_ASSISTANT_ID)
+print(os.environ.get("OPENAI_ASSISTANT_ID"))
 
 DEFAULT_OPENAI_FUNCTION_CALL_MODULE_NAME = None
 OPENAI_FUNCTION_CALL_MODULE_NAME = os.environ.get(

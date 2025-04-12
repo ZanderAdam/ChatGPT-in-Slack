@@ -24,16 +24,7 @@ from app.openai_image_ops import (
     generate_image,
     generate_image_variations,
 )
-from app.openai_ops import (
-    start_receiving_openai_response,
-    format_openai_message_content,
-    consume_openai_stream_to_write_reply,
-    build_system_text,
-    messages_within_context_window,
-    generate_slack_thread_summary,
-    generate_proofreading_result,
-    generate_chatgpt_response,
-)
+from app.openai_ops import generate_assistant_response
 from app.slack_constants import DEFAULT_LOADING_TEXT, TIMEOUT_ERROR_MESSAGE
 from app.slack_ops import (
     find_parent_message,
@@ -110,10 +101,6 @@ def respond_to_app_mention(
             return
 
     wip_reply = None
-    # Replace placeholder for Slack user ID in the system prompt
-    system_text = build_system_text(SYSTEM_TEXT, TRANSLATE_MARKDOWN, context)
-    messages = [{"role": "system", "content": system_text}]
-
     openai_api_key = context.get("OPENAI_API_KEY")
     try:
         if openai_api_key is None:
@@ -124,64 +111,10 @@ def respond_to_app_mention(
             return
 
         user_id = context.actor_user_id or context.user_id
-        if thread_ts is not None:
-            # Mentioning the bot user in a thread
-            replies_in_thread = client.conversations_replies(
-                channel=context.channel_id,
-                ts=thread_ts,
-                include_all_metadata=True,
-                limit=1000,
-            ).get("messages", [])
-            for reply in replies_in_thread:
-                reply_text = redact_string(reply.get("text"))
-                message_text_item = {
-                    "type": "text",
-                    "text": f"<@{reply['user'] if 'user' in reply else reply['username']}>: "
-                    + format_openai_message_content(reply_text, TRANSLATE_MARKDOWN),
-                }
-                content = [message_text_item]
-
-                if reply.get("bot_id") is None and can_send_image_url_to_openai(
-                    context
-                ):
-                    append_image_content_if_exists(
-                        bot_token=context.bot_token,
-                        files=reply.get("files"),
-                        content=content,
-                        logger=context.logger,
-                    )
-
-                messages.append(
-                    {
-                        "role": (
-                            "assistant"
-                            if "user" in reply and reply["user"] == context.bot_user_id
-                            else "user"
-                        ),
-                        "content": content,
-                    }
-                )
-        else:
-            # Strip bot Slack user ID from initial message
-            msg_text = re.sub(f"<@{context.bot_user_id}>\\s*", "", payload["text"])
-            msg_text = redact_string(msg_text)
-            message_text_item = {
-                "type": "text",
-                "text": f"<@{user_id}>: "
-                + format_openai_message_content(msg_text, TRANSLATE_MARKDOWN),
-            }
-            content = [message_text_item]
-
-            if payload.get("bot_id") is None and can_send_image_url_to_openai(context):
-                append_image_content_if_exists(
-                    bot_token=context.bot_token,
-                    files=payload.get("files"),
-                    content=content,
-                    logger=context.logger,
-                )
-
-            messages.append({"role": "user", "content": content})
-
+        # Strip bot Slack user ID from initial message
+        msg_text = re.sub(f"<@{context.bot_user_id}>\\s*", "", payload["text"])
+        msg_text = redact_string(msg_text)
+        
         loading_text = translate(
             openai_api_key=openai_api_key, context=context, text=DEFAULT_LOADING_TEXT
         )
@@ -190,49 +123,22 @@ def respond_to_app_mention(
             channel=context.channel_id,
             thread_ts=payload["ts"],
             loading_text=loading_text,
-            messages=messages,
+            messages=[{"role": "system", "content": SYSTEM_TEXT}],
             user=context.user_id,
         )
-
-        (
-            messages,
-            num_context_tokens,
-            max_context_tokens,
-        ) = messages_within_context_window(messages, context=context)
-        num_messages = len([msg for msg in messages if msg.get("role") != "system"])
-        if num_messages == 0:
-            update_wip_message(
-                client=client,
-                channel=context.channel_id,
-                ts=wip_reply["message"]["ts"],
-                text=f":warning: The previous message is too long ({num_context_tokens}/{max_context_tokens} prompt tokens).",
-                messages=messages,
-                user=context.user_id,
-            )
-        else:
-            stream = start_receiving_openai_response(
-                openai_api_key=openai_api_key,
-                model=context["OPENAI_MODEL"],
-                temperature=context["OPENAI_TEMPERATURE"],
-                messages=messages,
-                user=context.user_id,
-                openai_api_type=context["OPENAI_API_TYPE"],
-                openai_api_base=context["OPENAI_API_BASE"],
-                openai_api_version=context["OPENAI_API_VERSION"],
-                openai_deployment_id=context["OPENAI_DEPLOYMENT_ID"],
-                openai_organization_id=context["OPENAI_ORG_ID"],
-                function_call_module_name=context["OPENAI_FUNCTION_CALL_MODULE_NAME"],
-            )
-            consume_openai_stream_to_write_reply(
-                client=client,
-                wip_reply=wip_reply,
-                context=context,
-                user_id=user_id,
-                messages=messages,
-                stream=stream,
-                timeout_seconds=OPENAI_TIMEOUT_SECONDS,
-                translate_markdown=TRANSLATE_MARKDOWN,
-            )
+        
+        response = generate_assistant_response(
+            context=context,
+            logger=logger,
+            prompt=msg_text,
+            timeout_seconds=OPENAI_TIMEOUT_SECONDS,
+        )
+        
+        client.chat_update(
+            channel=context.channel_id,
+            ts=wip_reply["message"]["ts"],
+            text=response,
+        )
 
     except (APITimeoutError, TimeoutError):
         if wip_reply is not None:
@@ -299,20 +205,9 @@ def respond_to_new_message(
         if is_in_dm_with_bot is False and thread_ts is None:
             return
 
-        messages_in_context = []
+        # Determine if we should respond to this message
         if is_in_dm_with_bot is True and thread_ts is None:
-            # In the DM with the bot; this is not within a thread
-            past_messages = client.conversations_history(
-                channel=context.channel_id,
-                include_all_metadata=True,
-                limit=100,
-            ).get("messages", [])
-            past_messages.reverse()
-            # Remove old messages
-            for message in past_messages:
-                seconds = time.time() - float(message.get("ts"))
-                if seconds < 86400:  # less than 1 day
-                    messages_in_context.append(message)
+            # In the DM with the bot; not within a thread
             is_thread_for_this_app = True
         else:
             # Within a thread
@@ -345,151 +240,36 @@ def respond_to_new_message(
         if is_thread_for_this_app is False:
             return
 
-        messages = []
-        user_id = context.actor_user_id or context.user_id
-        last_assistant_idx = -1
-        indices_to_remove = []
-        for idx, reply in enumerate(messages_in_context):
-            maybe_event_type = reply.get("metadata", {}).get("event_type")
-            if maybe_event_type == "chat-gpt-convo":
-                if context.bot_id != reply.get("bot_id"):
-                    # Remove messages by a different app
-                    indices_to_remove.append(idx)
-                    continue
-                maybe_new_messages = (
-                    reply.get("metadata", {}).get("event_payload", {}).get("messages")
-                )
-                if maybe_new_messages is not None:
-                    if len(messages) == 0 or user_id is None:
-                        new_user_id = (
-                            reply.get("metadata", {})
-                            .get("event_payload", {})
-                            .get("user")
-                        )
-                        if new_user_id is not None:
-                            user_id = new_user_id
-                    messages = maybe_new_messages
-                    last_assistant_idx = idx
-
-        if is_in_dm_with_bot is True or last_assistant_idx == -1:
-            # To know whether this app needs to start a new convo
-            if not next(filter(lambda msg: msg["role"] == "system", messages), None):
-                # Replace placeholder for Slack user ID in the system prompt
-                system_text = build_system_text(
-                    SYSTEM_TEXT, TRANSLATE_MARKDOWN, context
-                )
-                messages.insert(0, {"role": "system", "content": system_text})
-
-        filtered_messages_in_context = []
-        for idx, reply in enumerate(messages_in_context):
-            # Strip bot Slack user ID from initial message
-            if idx == 0:
-                reply["text"] = re.sub(
-                    f"<@{context.bot_user_id}>\\s*", "", reply["text"]
-                )
-            if idx not in indices_to_remove:
-                filtered_messages_in_context.append(reply)
-        if len(filtered_messages_in_context) == 0:
-            return
-
-        for reply in filtered_messages_in_context:
-            msg_user_id = reply.get("user")
-            reply_text = redact_string(reply.get("text"))
-            content = [
-                {
-                    "type": "text",
-                    "text": f"<@{msg_user_id}>: "
-                    + format_openai_message_content(reply_text, TRANSLATE_MARKDOWN),
-                }
-            ]
-            if reply.get("bot_id") is None and can_send_image_url_to_openai(context):
-                append_image_content_if_exists(
-                    bot_token=context.bot_token,
-                    files=reply.get("files"),
-                    content=content,
-                    logger=context.logger,
-                )
-
-            messages.append(
-                {
-                    "content": content,
-                    "role": (
-                        "assistant"
-                        if "user" in reply and reply["user"] == context.bot_user_id
-                        else "user"
-                    ),
-                }
-            )
-
+        # Extract the message content
+        msg_text = redact_string(payload.get("text", ""))
+        
+        # Post a "working on it" message
         loading_text = translate(
             openai_api_key=openai_api_key, context=context, text=DEFAULT_LOADING_TEXT
         )
         wip_reply = post_wip_message(
             client=client,
             channel=context.channel_id,
-            thread_ts=payload.get("thread_ts") if is_in_dm_with_bot else payload["ts"],
+            thread_ts=thread_ts if thread_ts else payload["ts"],
             loading_text=loading_text,
-            messages=messages,
-            user=user_id,
+            messages=[{"role": "system", "content": SYSTEM_TEXT}],
+            user=context.actor_user_id or context.user_id,
         )
 
-        (
-            messages,
-            num_context_tokens,
-            max_context_tokens,
-        ) = messages_within_context_window(messages, context=context)
-        num_messages = len([msg for msg in messages if msg.get("role") != "system"])
-        if num_messages == 0:
-            update_wip_message(
-                client=client,
-                channel=context.channel_id,
-                ts=wip_reply["message"]["ts"],
-                text=f":warning: The previous message is too long ({num_context_tokens}/{max_context_tokens} prompt tokens).",
-                messages=messages,
-                user=context.user_id,
-            )
-        else:
-            stream = start_receiving_openai_response(
-                openai_api_key=openai_api_key,
-                model=context["OPENAI_MODEL"],
-                temperature=context["OPENAI_TEMPERATURE"],
-                messages=messages,
-                user=user_id,
-                openai_api_type=context["OPENAI_API_TYPE"],
-                openai_api_base=context["OPENAI_API_BASE"],
-                openai_api_version=context["OPENAI_API_VERSION"],
-                openai_deployment_id=context["OPENAI_DEPLOYMENT_ID"],
-                openai_organization_id=context["OPENAI_ORG_ID"],
-                function_call_module_name=context["OPENAI_FUNCTION_CALL_MODULE_NAME"],
-            )
-
-            latest_replies = client.conversations_replies(
-                channel=context.channel_id,
-                ts=wip_reply.get("ts"),
-                include_all_metadata=True,
-                limit=1000,
-            )
-            if (
-                latest_replies.get("messages", [])[-1]["ts"]
-                != wip_reply["message"]["ts"]
-            ):
-                # Since a new reply will come soon, this app abandons this reply
-                client.chat_delete(
-                    channel=context.channel_id,
-                    ts=wip_reply["message"]["ts"],
-                )
-                return
-
-            consume_openai_stream_to_write_reply(
-                client=client,
-                wip_reply=wip_reply,
-                context=context,
-                user_id=user_id,
-                messages=messages,
-                stream=stream,
-                timeout_seconds=OPENAI_TIMEOUT_SECONDS,
-                translate_markdown=TRANSLATE_MARKDOWN,
-            )
+        # Get response from the assistant
+        response = generate_assistant_response(
+            context=context,
+            logger=logger,
+            prompt=msg_text,
+            timeout_seconds=OPENAI_TIMEOUT_SECONDS,
+        )
+        
+        # Update the message with the response
+        client.chat_update(
+            channel=context.channel_id,
+            ts=wip_reply["message"]["ts"],
+            text=response,
+        )
 
     except (APITimeoutError, TimeoutError):
         if wip_reply is not None:
@@ -620,12 +400,12 @@ def prepare_and_share_thread_summary(
             context=context,
             text="Here is the summary:",
         )
-        summary = generate_slack_thread_summary(
+        
+        summary_prompt = f"Please summarize this conversation thread. {prompt}\n\nThread content:\n{thread_content}"
+        summary = generate_assistant_response(
             context=context,
             logger=logger,
-            openai_api_key=openai_api_key,
-            prompt=prompt,
-            thread_content=thread_content,
+            prompt=summary_prompt,
             timeout_seconds=OPENAI_TIMEOUT_SECONDS,
         )
 
@@ -700,14 +480,20 @@ def display_proofreading_result(
             else None
         )
         text = "\n".join(map(lambda s: f">{s}", original_text.split("\n")))
-        result = generate_proofreading_result(
+        
+        # Build prompt for proofreading
+        prompt = "Please proofread the following text. Enhance the quality without altering the original meaning."
+        if tone_and_voice:
+            prompt += f" The output should be suitable for {tone_and_voice}."
+        prompt += f"\n\nText to proofread:\n{original_text}"
+        
+        result = generate_assistant_response(
             context=context,
             logger=logger,
-            openai_api_key=openai_api_key,
-            original_text=original_text,
-            tone_and_voice=tone_and_voice,
+            prompt=prompt,
             timeout_seconds=OPENAI_TIMEOUT_SECONDS,
         )
+        
         view = build_proofreading_result_modal(
             context=context,
             payload=payload,
@@ -1055,14 +841,12 @@ def display_chat_from_scratch_result(
     payload: dict,
 ):
     text = ""
-    openai_api_key = context.get("OPENAI_API_KEY")
     try:
         prompt = extract_state_value(payload, "prompt")["value"]
         text = "\n".join(map(lambda s: f">{s}", prompt.split("\n")))
-        result = generate_chatgpt_response(
+        result = generate_assistant_response(
             context=context,
             logger=logger,
-            openai_api_key=openai_api_key,
             prompt=prompt,
             timeout_seconds=OPENAI_TIMEOUT_SECONDS,
         )

@@ -31,6 +31,7 @@ from app.env import (
     OPENAI_FUNCTION_CALL_MODULE_NAME,
     OPENAI_ORG_ID,
     OPENAI_IMAGE_GENERATION_MODEL,
+    OPENAI_ASSISTANT_ID,
 )
 from app.slack_ui import (
     build_home_tab,
@@ -162,17 +163,22 @@ def handler(event, context_):
                 context["OPENAI_TEMPERATURE"] = config.get(
                     "temperature", OPENAI_TEMPERATURE
                 )
+                context["OPENAI_ASSISTANT_ID"] = config.get(
+                    "assistant_id", OPENAI_ASSISTANT_ID
+                )
             else:
                 # The legacy data format
                 context["OPENAI_API_KEY"] = config_str
                 context["OPENAI_MODEL"] = OPENAI_MODEL
                 context["OPENAI_IMAGE_GENERATION_MODEL"] = OPENAI_IMAGE_GENERATION_MODEL
                 context["OPENAI_TEMPERATURE"] = OPENAI_TEMPERATURE
+                context["OPENAI_ASSISTANT_ID"] = OPENAI_ASSISTANT_ID
         except:  # noqa: E722
             context["OPENAI_API_KEY"] = None
             context["OPENAI_MODEL"] = None
             context["OPENAI_IMAGE_GENERATION_MODEL"] = None
             context["OPENAI_TEMPERATURE"] = None
+            context["OPENAI_ASSISTANT_ID"] = None
 
         context["OPENAI_API_TYPE"] = OPENAI_API_TYPE
         context["OPENAI_API_BASE"] = OPENAI_API_BASE
