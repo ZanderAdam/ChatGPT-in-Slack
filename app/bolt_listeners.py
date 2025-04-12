@@ -7,7 +7,7 @@ from slack_sdk.web import WebClient
 
 from app.env import OPENAI_TIMEOUT_SECONDS, SYSTEM_TEXT
 from app.openai_ops import generate_assistant_response
-from app.slack_constants import DEFAULT_LOADING_TEXT, TIMEOUT_ERROR_MESSAGE
+from app.slack_constants import TIMEOUT_ERROR_MESSAGE, get_random_loading_message
 from app.slack_ops import (
     find_parent_message,
     is_this_app_mentioned,
@@ -52,7 +52,7 @@ def respond_to_app_mention(
             client=client,
             channel=context.channel_id,
             thread_ts=payload["ts"],
-            loading_text=DEFAULT_LOADING_TEXT,
+            loading_text=get_random_loading_message(),
             messages=[{"role": "system", "content": SYSTEM_TEXT}],
             user=context.user_id,
         )
@@ -161,7 +161,7 @@ def respond_to_new_message(
             client=client,
             channel=context.channel_id,
             thread_ts=thread_ts if thread_ts else payload["ts"],
-            loading_text=DEFAULT_LOADING_TEXT,
+            loading_text=get_random_loading_message(),
             messages=[{"role": "system", "content": SYSTEM_TEXT}],
             user=context.actor_user_id or context.user_id,
         )
