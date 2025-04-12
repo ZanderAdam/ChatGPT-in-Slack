@@ -38,7 +38,6 @@ from app.slack_ui import (
     DEFAULT_HOME_TAB_MESSAGE,
     build_configure_modal,
 )
-from app.i18n import translate
 
 #
 # Product deployment (AWS Lambda)

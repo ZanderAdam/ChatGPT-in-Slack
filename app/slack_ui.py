@@ -2,7 +2,6 @@ import json
 from typing import Optional, List
 from slack_bolt import BoltContext
 from slack_sdk.errors import SlackApiError
-from app.i18n import translate
 from app.openai_constants import (
     GPT_3_5_TURBO_MODEL,
     GPT_4_MODEL,
